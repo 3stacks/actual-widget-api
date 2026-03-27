@@ -1,0 +1,13 @@
+{
+  "name": "actual-widget-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@actual-app/api": "^26.3.0",
+    "express": "^4.21.0"
+  }
+}
