@@ -49,6 +49,7 @@ function getCurrentMonth() {
 }
 
 const app = express();
+app.use(express.json());
 
 // GET /api/budget — returns all categories with budgeted/spent/balance for current month
 app.get("/api/budget", async (_req, res) => {
@@ -231,6 +232,72 @@ app.get("/api/age-of-money", async (_req, res) => {
       outflowCount: outflows.length,
       updatedAt: new Date().toISOString(),
     });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/accounts — list non-closed accounts
+app.get("/api/accounts", async (_req, res) => {
+  try {
+    await ensureConnected();
+    const accounts = await actualApi.getAccounts();
+    const result = accounts
+      .filter((a) => !a.closed)
+      .map((a) => ({ id: a.id, name: a.name }));
+    res.json({ accounts: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/categories — list non-income categories grouped
+app.get("/api/categories", async (_req, res) => {
+  try {
+    await ensureConnected();
+    const categories = await actualApi.getCategories();
+    const groups = await actualApi.getCategoryGroups();
+
+    const groupMap = {};
+    for (const g of groups) groupMap[g.id] = g.name;
+
+    const result = categories
+      .filter((c) => !c.is_income && !c.hidden)
+      .map((c) => ({ id: c.id, name: c.name, group: groupMap[c.group_id] || "" }));
+    res.json({ categories: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/transactions — add a transaction
+app.post("/api/transactions", async (req, res) => {
+  try {
+    await ensureConnected();
+    const { accountId, date, amount, payee, categoryId, notes } = req.body;
+
+    if (!accountId || !date || amount === undefined || !payee) {
+      return res.status(400).json({ error: "accountId, date, amount, and payee are required" });
+    }
+
+    const amountCents = Math.round(amount * 100);
+
+    const tx = {
+      account: accountId,
+      date,
+      amount: amountCents,
+      payee_name: payee,
+      notes: notes || undefined,
+      category: categoryId || undefined,
+    };
+
+    const id = await actualApi.addTransactions(accountId, [tx]);
+    await actualApi.sync();
+
+    res.json({ ok: true, id });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
