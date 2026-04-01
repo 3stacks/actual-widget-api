@@ -48,8 +48,18 @@ function getCurrentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+const { API_TOKEN = "" } = process.env;
+
 const app = express();
 app.use(express.json());
+
+// Bearer token auth middleware
+function requireToken(req, res, next) {
+  if (!API_TOKEN) return next(); // no token configured = open access
+  const auth = req.headers.authorization;
+  if (auth === `Bearer ${API_TOKEN}`) return next();
+  res.status(401).json({ error: "Unauthorized" });
+}
 
 // GET /api/budget — returns all categories with budgeted/spent/balance for current month
 app.get("/api/budget", async (_req, res) => {
@@ -238,8 +248,25 @@ app.get("/api/age-of-money", async (_req, res) => {
   }
 });
 
+// GET /api/payees — list all payees
+app.get("/api/payees", requireToken, async (_req, res) => {
+  try {
+    await ensureConnected();
+    const payees = await actualApi.getPayees();
+    const result = payees.map((p) => ({
+      id: p.id,
+      name: p.name,
+      transfer_acct: p.transfer_acct || null,
+    }));
+    res.json({ payees: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/accounts — list non-closed accounts
-app.get("/api/accounts", async (_req, res) => {
+app.get("/api/accounts", requireToken, async (_req, res) => {
   try {
     await ensureConnected();
     const accounts = await actualApi.getAccounts();
@@ -254,7 +281,7 @@ app.get("/api/accounts", async (_req, res) => {
 });
 
 // GET /api/categories — list non-income categories grouped
-app.get("/api/categories", async (_req, res) => {
+app.get("/api/categories", requireToken, async (_req, res) => {
   try {
     await ensureConnected();
     const categories = await actualApi.getCategories();
@@ -274,7 +301,7 @@ app.get("/api/categories", async (_req, res) => {
 });
 
 // POST /api/transactions — add a transaction
-app.post("/api/transactions", async (req, res) => {
+app.post("/api/transactions", requireToken, async (req, res) => {
   try {
     await ensureConnected();
     const { accountId, date, amount, payee, categoryId, notes } = req.body;
