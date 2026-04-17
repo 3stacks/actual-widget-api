@@ -161,6 +161,8 @@ app.get("/api/budget/summary", async (_req, res) => {
 });
 
 // GET /api/age-of-money — YNAB-style age of money calculation
+// Uses pre-window balance carry-forward to avoid age collapse when large
+// inflows roll out of the lookback window.
 app.get("/api/age-of-money", async (_req, res) => {
   try {
     await ensureConnected();
@@ -168,28 +170,37 @@ app.get("/api/age-of-money", async (_req, res) => {
 
     const accounts = await actualApi.getAccounts();
     const endDate = new Date().toISOString().split("T")[0];
-    const startDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const windowStart = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+    const startDate = windowStart.toISOString().split("T")[0];
 
-    const allTransactions = [];
-    for (const account of accounts) {
-      if (account.closed) continue;
-      const txs = await actualApi.getTransactions(account.id, startDate, endDate);
-      allTransactions.push(...txs);
-    }
-
+    // Fetch all transactions (pre-window + window) to carry forward old money
+    let preWindowBalance = 0;
     const inflows = [];
     const outflows = [];
 
-    for (const tx of allTransactions) {
-      if (tx.transfer_id) continue;
-      const amount = tx.amount || 0;
-      const date = new Date(tx.date);
-
-      if (amount > 0) {
-        inflows.push({ date, amount, remaining: amount });
-      } else if (amount < 0) {
-        outflows.push({ date, amount: Math.abs(amount) });
+    for (const account of accounts) {
+      if (account.closed) continue;
+      const txs = await actualApi.getTransactions(account.id, "2000-01-01", endDate);
+      for (const tx of txs) {
+        if (tx.transfer_id) continue;
+        const amount = tx.amount || 0;
+        if (tx.date < startDate) {
+          // Accumulate pre-window net balance
+          preWindowBalance += amount;
+        } else {
+          const date = new Date(tx.date);
+          if (amount > 0) {
+            inflows.push({ date, amount, remaining: amount });
+          } else if (amount < 0) {
+            outflows.push({ date, amount: Math.abs(amount) });
+          }
+        }
       }
+    }
+
+    // Inject synthetic inflow at window start for money that predates the window
+    if (preWindowBalance > 0) {
+      inflows.push({ date: windowStart, amount: preWindowBalance, remaining: preWindowBalance });
     }
 
     inflows.sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -240,6 +251,7 @@ app.get("/api/age-of-money", async (_req, res) => {
       lookbackDays,
       inflowCount: inflows.length,
       outflowCount: outflows.length,
+      preWindowBalance: preWindowBalance / 100,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
